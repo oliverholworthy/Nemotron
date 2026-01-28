@@ -25,6 +25,8 @@ Usage:
 
 from __future__ import annotations
 
+from importlib import metadata
+
 import typer
 
 from nemotron.kit.cli.globals import global_callback
@@ -87,8 +89,70 @@ def _register_groups() -> None:
     app.add_typer(kit_app, name="kit")
 
 
+def _register_plugins() -> None:
+    """Register external CLI plugins declared via entry points.
+
+    Plugins should be registered under the `nemotron.cli.plugins` entry-point group,
+    where each entry point provides either:
+    - a `typer.Typer` instance, or
+    - a zero-arg callable that returns a `typer.Typer` instance.
+
+    Example (pyproject.toml):
+        [project.entry-points."nemotron.cli.plugins"]
+        embed = "nemotron_embed.cli:embed_app"
+    """
+
+    group = "nemotron.cli.plugins"
+
+    try:
+        eps = metadata.entry_points()
+    except Exception:
+        return
+
+    # Python 3.10+: EntryPoints has .select(); older: dict-like mapping
+    if hasattr(eps, "select"):
+        plugins = list(eps.select(group=group))
+    else:
+        plugins = list(eps.get(group, []))  # type: ignore[call-arg]
+
+    for ep in plugins:
+        name = getattr(ep, "name", None)
+        if not name:
+            continue
+
+        # Avoid collisions with built-in groups
+        if name in {"nano3", "kit"}:
+            continue
+
+        try:
+            loaded = ep.load()
+        except Exception:
+            # Best-effort: a bad plugin shouldn't break the CLI.
+            continue
+
+        plugin_app: typer.Typer | None = None
+        if isinstance(loaded, typer.Typer):
+            plugin_app = loaded
+        elif callable(loaded):
+            try:
+                maybe_app = loaded()
+            except Exception:
+                continue
+            if isinstance(maybe_app, typer.Typer):
+                plugin_app = maybe_app
+
+        if plugin_app is None:
+            continue
+
+        try:
+            app.add_typer(plugin_app, name=name)
+        except Exception:
+            continue
+
+
 # Register groups on import
 _register_groups()
+_register_plugins()
 
 
 def main() -> None:
