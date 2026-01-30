@@ -20,6 +20,7 @@ for recipe commands.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,7 @@ class RecipeMetadata:
     workdir: str | None = None
     pre_ray_start_commands: list[str] | None = None
     run_command: str | None = None
+    dependencies: list[str] | None = None
 
 
 def recipe(
@@ -82,6 +84,7 @@ def recipe(
     workdir: str | None = None,
     pre_ray_start_commands: list[str] | None = None,
     run_command: str | None = None,
+    dependencies: list[str] | None = None,
 ) -> Callable:
     """Decorator marking a function as a recipe command.
 
@@ -115,6 +118,10 @@ def recipe(
             {config} - the config path (e.g., "config.yaml")
             Example: "python {script} --config {config}"
             Can be overridden via YAML config at `run.env.run_command`.
+        dependencies: List of dependencies to install in remote containers.
+            - Local paths (e.g., "libraries/Automodel") are installed with pip install -e
+            - Package names (e.g., "nemo-automodel") are installed from PyPI
+            Example: ["libraries/Nemotron", "libraries/Automodel", "transformers>=4.40"]
 
     Example:
         @recipe(
@@ -246,6 +253,7 @@ def recipe(
                     pre_ray_start_commands=pre_ray_start_commands,
                     run_command=run_command,
                     force_squash=global_ctx.force_squash,
+                    dependencies=dependencies,
                 )
 
         # Attach metadata to function for introspection
@@ -261,6 +269,7 @@ def recipe(
             workdir=workdir,
             pre_ray_start_commands=pre_ray_start_commands,
             run_command=run_command,
+            dependencies=dependencies,
         )
 
         return wrapper
@@ -325,6 +334,7 @@ def _execute_nemo_run(
     pre_ray_start_commands: list[str] | None = None,
     run_command: str | None = None,
     force_squash: bool = False,
+    dependencies: list[str] | None = None,
 ) -> None:
     """Execute script via nemo-run.
 
@@ -343,6 +353,7 @@ def _execute_nemo_run(
         pre_ray_start_commands: Shell commands to run before Ray starts
         run_command: Custom command template (supports {script} and {config} placeholders)
         force_squash: Whether to force re-squash container image
+        dependencies: List of dependencies to install in remote containers
     """
     import time
 
@@ -371,6 +382,7 @@ def _execute_nemo_run(
         attached=attached,
         packager=packager,
         force_squash=force_squash,
+        dependencies=dependencies,
     )
 
     # Script args use flat names on remote
@@ -556,6 +568,7 @@ def _build_executor(
     attached: bool = True,
     packager: str = "pattern",
     force_squash: bool = False,
+    dependencies: list[str] | None = None,
 ) -> Any:
     """Build nemo-run executor from env config.
 
@@ -570,6 +583,7 @@ def _build_executor(
         ray: Whether this recipe requires Ray
         attached: Whether running in attached mode (--run vs --batch)
         force_squash: Whether to force re-squash container image
+        dependencies: List of dependencies to install in remote containers
 
     Returns:
         nemo-run Executor instance
@@ -613,6 +627,7 @@ def _build_executor(
             train_path,
             job_dir,
             packager=packager,
+            dependencies=dependencies,
         )
 
         # Container image can be specified as "container" or "container_image"
@@ -741,6 +756,7 @@ def _build_packager(
     job_dir: Path,
     *,
     packager: str = "pattern",
+    dependencies: list[str] | None = None,
 ) -> Any:
     """Build a packager for file syncing.
 
@@ -748,6 +764,11 @@ def _build_packager(
     - "pattern": Minimal sync of `main.py` + `config.yaml` only (default)
     - "code": Full codebase sync with exclusions (for Ray jobs needing local imports)
     - "self_contained": Inlines `nemotron.*` imports into a single script
+
+    Args:
+        dependencies: List of dependencies to install in remote containers.
+            - Local paths (e.g., "libraries/Automodel") are installed with pip install -e
+            - Package names (e.g., "nemo-automodel") are installed from PyPI
     """
     import shutil
 
@@ -768,6 +789,7 @@ def _build_packager(
             script_path=script_path,
             train_path=str(train_path),
             exclude_dirs=("usage-cookbook", "use-case-examples"),
+            dependencies=dependencies,
         )
 
     if packager != "pattern":
