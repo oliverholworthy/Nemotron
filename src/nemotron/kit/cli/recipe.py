@@ -552,7 +552,7 @@ def _execute_nemo_run(
                 executor=executor,
                 name=recipe_name,
             )
-            exp.run(detach=not attached)
+            exp.run(detach=not attached, tail_logs=attached)
 
 
 def _build_executor(
