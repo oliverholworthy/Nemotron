@@ -610,6 +610,63 @@ def _build_executor(
             env_vars=env_vars,
         )
 
+    elif executor_type == "docker":
+        # Container image can be specified as "container" or "container_image"
+        container_image = env_config.get("container_image") or env_config.get("container")
+        if not container_image:
+            raise ValueError("container_image required for docker executor")
+
+        # Resolve relative paths in mounts to absolute paths
+        # Docker requires absolute paths for volume mounts
+        mounts = env_config.get("mounts") or []
+        resolved_mounts = []
+        for mount in mounts:
+            if ":" in mount:
+                host_path, container_path = mount.split(":", 1)
+                # Expand environment variables (e.g., $XDG_CACHE_HOME)
+                expanded = os.path.expandvars(host_path)
+                # If env var wasn't set (still contains $), skip this mount
+                if "$" in expanded:
+                    typer.echo(
+                        f"[warning] Skipping mount {mount!r}: "
+                        f"environment variable not set",
+                        err=True,
+                    )
+                    continue
+                host_path = expanded
+                # Expand ~ to home directory
+                host_path = str(Path(host_path).expanduser())
+                # Resolve relative paths (./path or path without leading /)
+                if not host_path.startswith("/"):
+                    host_path = str(Path.cwd() / host_path)
+                resolved_mounts.append(f"{host_path}:{container_path}")
+            else:
+                resolved_mounts.append(mount)
+
+        # Build packager with code sync for Docker
+        # Use "code" packager to sync the full codebase, because:
+        # - "self_contained" tries to inline nemotron.* imports which fails
+        # - "pattern" only copies main.py + config.yaml but imports won't work
+        # - "code" syncs the full workspace so all imports are available
+        docker_packager = _build_packager(
+            script_path,
+            train_path,
+            job_dir,
+            packager="code",
+            dependencies=dependencies,
+        )
+
+        return run.DockerExecutor(
+            container_image=container_image,
+            num_gpus=env_config.get("gpus_per_node") or env_config.get("nproc_per_node"),
+            runtime=env_config.get("runtime", "nvidia"),
+            ipc_mode=env_config.get("ipc_mode"),
+            shm_size=env_config.get("shm_size"),
+            volumes=resolved_mounts,
+            env_vars=env_vars,
+            packager=docker_packager,
+        )
+
     elif executor_type == "slurm":
         # Build tunnel if configured
         tunnel = None
